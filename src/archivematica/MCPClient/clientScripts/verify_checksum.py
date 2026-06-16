@@ -28,7 +28,6 @@ us to easily call each of the tools packaged against its different algorithms:
 """
 
 import datetime
-import json
 import os
 import subprocess
 import sys
@@ -42,25 +41,8 @@ from archivematica.archivematicaCommon.custom_handlers import get_script_logger
 from archivematica.dashboard.main.models import Event
 from archivematica.dashboard.main.models import File
 from archivematica.dashboard.main.models import Transfer
-from archivematica.dashboard.main.models import UnitVariable
 
 logger = get_script_logger("archivematica.mcp.client.verify_checksum")
-
-
-def _get_ipds_re_preservation(unit_uuid):
-    for unit_type in ("Transfer", "SIP"):
-        try:
-            unit_var = UnitVariable.objects.get(
-                unittype=unit_type,
-                unituuid=unit_uuid,
-                variable="misc_attributes",
-            )
-            attrs = json.loads(unit_var.variablevalue or "{}")
-            if attrs.get("ipds-re-preservation"):
-                return True
-        except UnitVariable.DoesNotExist:
-            continue
-    return False
 
 
 class NoHashCommandAvailable(Exception):
@@ -154,9 +136,9 @@ class Hashsum:
                 if line.endswith(self.OKAY_STRING):
                     continue
                 if (
-                    line.endswith(self.FAIL_STRING)
-                    or self.ZERO_STRING in line
-                    or self.IMPROPER_STRING in line
+                        line.endswith(self.FAIL_STRING)
+                        or self.ZERO_STRING in line
+                        or self.IMPROPER_STRING in line
                 ):
                     self.job.pyprint(
                         f"{self.get_ext(self.hashfile)}: {line}",
@@ -254,7 +236,7 @@ def write_premis_event_per_file(file_uuids, transfer_uuid, event_detail):
         # Adding many-to-many fields with bulk create is awkward, we have to
         # loop through again.
         for event in Event.objects.filter(
-            file_uuid__in=[event.file_uuid for event in events]
+                file_uuid__in=[event.file_uuid for event in events]
         ):
             event.agents.add(*agents)
 
@@ -307,11 +289,4 @@ def call(jobs):
     """Primary entry point for MCP Client script."""
     for job in jobs:
         with job.JobContext(logger=logger):
-            transfer_uuid = job.args[2] if len(job.args) > 2 else None
-            if transfer_uuid and _get_ipds_re_preservation(transfer_uuid):
-                job.pyprint(
-                    "ipds-re-preservation=True: skipping checksum verification."
-                )
-                job.set_status(0)
-                continue
             job.set_status(run_hashsum_commands(job))

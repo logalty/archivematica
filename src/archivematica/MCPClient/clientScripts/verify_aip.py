@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-import json
 import os
 import shutil
 import sys
@@ -19,125 +18,12 @@ from archivematica.archivematicaCommon.custom_handlers import get_script_logger
 from archivematica.archivematicaCommon.executeOrRunSubProcess import executeOrRun
 from archivematica.dashboard.main.models import File
 from archivematica.dashboard.main.models import SIP
-from archivematica.dashboard.main.models import UnitVariable
 
 LOGGER = get_script_logger("archivematica.mcp.client.verify_aip")
 
 
 class VerifyChecksumsError(Exception):
     """Checksum verification has failed."""
-
-
-def _get_ipds_re_preservation(unit_uuid):
-    """Return True if any UnitVariable misc_attributes row for the unit contains
-    the key 'ipds-re-preservation' with a truthy value.
-
-    Behavior:
-    - Search both unit types "SIP" and "Transfer".
-    - Iterate misc_attributes rows (most recent first) and pick the first row
-      that actually contains the 'ipds-re-preservation' key.
-    - Interpret booleans, numbers and common truthy strings robustly.
-    - If no row contains the key, return False.
-    """
-    for unit_type in ("SIP", "Transfer"):
-        try:
-            qs = (
-                UnitVariable.objects.filter(
-                    unittype=unit_type,
-                    unituuid=unit_uuid,
-                    variable="misc_attributes",
-                )
-                .order_by("-pk")
-            )
-            if not qs.exists():
-                continue
-
-            for uv in qs:
-                try:
-                    attrs = json.loads(uv.variablevalue or "{}")
-                except Exception:
-                    LOGGER.debug(
-                        "Failed to parse UnitVariable.variablevalue for %s %s (pk=%s): %r",
-                        unit_type,
-                        unit_uuid,
-                        getattr(uv, "pk", None),
-                        uv.variablevalue,
-                    )
-                    continue
-
-                # If the row doesn't contain the key, skip it.
-                if "ipds-re-preservation" not in attrs:
-                    continue
-
-                raw = attrs.get("ipds-re-preservation")
-                LOGGER.debug(
-                    "UnitVariable misc_attributes for %s %s (pk=%s) contains ipds-re-preservation=%r",
-                    unit_type,
-                    unit_uuid,
-                    getattr(uv, "pk", None),
-                    raw,
-                )
-
-                # Interpret the value robustly:
-                if isinstance(raw, bool):
-                    result = raw
-                elif isinstance(raw, (int, float)):
-                    result = raw != 0
-                elif isinstance(raw, str):
-                    result = raw.strip().lower() in ("true", "1", "yes", "y", "on")
-                else:
-                    # Unknown type (e.g. None) -> treat as False.
-                    result = False
-
-                if result:
-                    LOGGER.info(
-                        "ipds-re-preservation=True found in UnitVariable (pk=%s %s %s): %r",
-                        getattr(uv, "pk", None),
-                        unit_type,
-                        unit_uuid,
-                        raw,
-                    )
-                else:
-                    LOGGER.info(
-                        "ipds-re-preservation present but False in UnitVariable (pk=%s %s %s): %r",
-                        getattr(uv, "pk", None),
-                        unit_type,
-                        unit_uuid,
-                        raw,
-                    )
-                # Return the interpretation for the first row that contains the key.
-                return result
-        except Exception:
-            LOGGER.exception(
-                "Error reading UnitVariable records for %s %s", unit_type, unit_uuid
-            )
-            continue
-
-    # No row contained the key.
-    return False
-
-
-
-def _debug_dump_unit_variables(job, unit_uuid):
-    """Log all UnitVariable records (type, value) for the given uuid for debugging."""
-    try:
-        for unit_type in ("SIP", "Transfer"):
-            q = UnitVariable.objects.filter(unittype=unit_type, unituuid=unit_uuid).order_by("-pk")
-            count = q.count()
-            LOGGER.debug("Found %d UnitVariable records for %s %s", count, unit_type, unit_uuid)
-            job.pyprint(f"Found {count} UnitVariable records for {unit_type} {unit_uuid}")
-            for uv in q:
-                try:
-                    job.pyprint(f"UnitVariable[{uv.pk}] {unit_type} {unit_uuid} variable={uv.variable} value={uv.variablevalue}")
-                    LOGGER.debug("UnitVariable[%s] %s %s variable=%s value=%s", uv.pk, unit_type, unit_uuid, uv.variable, uv.variablevalue)
-                except Exception:
-                    LOGGER.exception("Failed to print UnitVariable %s", getattr(uv, 'pk', '<unknown>'))
-    except Exception:
-        LOGGER.exception("Failed to dump UnitVariable records for %s", unit_uuid)
-        try:
-            job.pyprint("Failed to dump UnitVariable records; see logs for details")
-        except Exception:
-            pass
 
 
 def extract_aip(job, aip_path, extract_path):
@@ -159,7 +45,7 @@ def extract_aip(job, aip_path, extract_path):
 
 
 def write_premis_event(
-    job, sip_uuid, checksum_type, event_outcome, event_outcome_detail_note
+        job, sip_uuid, checksum_type, event_outcome, event_outcome_detail_note
 ):
     """Write the AIP-level "fixity check" PREMIS event."""
     try:
@@ -194,7 +80,7 @@ def assert_checksum_types_match(job, file_, sip_uuid, settings_checksum_type):
 
 
 def get_expected_checksum(
-    job, bag, file_, sip_uuid, checksum_type, file_path, is_reingest
+        job, bag, file_, sip_uuid, checksum_type, file_path, is_reingest
 ):
     """Raise an exception if an expected checksum cannot be found in the
     Bag manifest.
@@ -246,12 +132,12 @@ def verify_checksums(job, bag, sip_uuid):
         verification_skipped_because_reingest = 0
         for file_ in File.objects.filter(sip_id=sip_uuid):
             if (
-                os.path.basename(file_.originallocation.decode()) in removableFiles
-                or file_.removedtime
-                or not file_.currentlocation.decode().startswith(
-                    "%SIPDirectory%objects/"
-                )
-                or file_.filegrpuse == "manualNormalization"
+                    os.path.basename(file_.originallocation.decode()) in removableFiles
+                    or file_.removedtime
+                    or not file_.currentlocation.decode().startswith(
+                "%SIPDirectory%objects/"
+            )
+                    or file_.filegrpuse == "manualNormalization"
             ):
                 continue
             file_path = os.path.join(
@@ -301,21 +187,6 @@ def verify_aip(job):
     sip_uuid = job.args[1]
     aip_path = job.args[2]
 
-    # Read ipds-re-preservation from UnitVariable (set by the reingest API endpoint).
-    # If True, skip BagIt structure and checksum validation entirely.
-    skip_validation = _get_ipds_re_preservation(sip_uuid)
-    # Debug: dump UnitVariable rows and print resolved flag value so we can
-    # determine how the flag is stored and why it may not be detected as True.
-    try:
-        _debug_dump_unit_variables(job, sip_uuid)
-    except Exception:
-        LOGGER.exception("Failed to dump UnitVariable for %s", sip_uuid)
-    job.pyprint(f"Resolved ipds-re-preservation flag value: {skip_validation}")
-    if skip_validation:
-        job.pyprint(
-            "ipds-re-preservation=True: skipping BagIt and checksum validation."
-        )
-
     temp_dir = mcpclient_settings.TEMP_DIRECTORY
     is_uncompressed_aip = os.path.isdir(aip_path)
 
@@ -331,23 +202,22 @@ def verify_aip(job):
             return 1
 
     return_code = 0
-    if not skip_validation:
-        try:
-            # Only validate completeness since we're going to verify checksums
-            # later against what we have in the database via `verify_checksums`.
-            bag = Bag(bag_path)
-            bag.validate(completeness_only=True)
-        except BagError as err:
-            job.print_error(f"Error validating BagIt package: {err}")
-            return_code = 1
+    try:
+        # Only validate completeness since we're going to verify checksums
+        # later against what we have in the database via `verify_checksums`.
+        bag = Bag(bag_path)
+        bag.validate(completeness_only=True)
+    except BagError as err:
+        job.print_error(f"Error validating BagIt package: {err}")
+        return_code = 1
 
-        if return_code == 0:
-            try:
-                verify_checksums(job, bag, sip_uuid)
-            except VerifyChecksumsError:
-                return_code = 1
-        else:
-            job.pyprint("Not verifying checksums because other tests have already failed.")
+    if return_code == 0:
+        try:
+            verify_checksums(job, bag, sip_uuid)
+        except VerifyChecksumsError:
+            return_code = 1
+    else:
+        job.pyprint("Not verifying checksums because other tests have already failed.")
 
     # cleanup
     if not is_uncompressed_aip:
