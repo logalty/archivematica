@@ -704,6 +704,45 @@ def reingest(request, target):
 
 
 @_api_endpoint(expected_methods=["POST"])
+def update_file_checksum(request):
+    """Update File.checksum after an IPDS signature extension.
+
+    Called by the Storage Service's finish_reingest when it extends a file's
+    digital signature.  Without this update the File table would retain the
+    original ingest checksum, causing a mismatch in verify_aip on the next
+    IPDS reingest.
+
+    POST parameters:
+        uuid           – SIP UUID
+        relative_path  – path relative to the SIP data/ dir, e.g. objects/doc.pdf
+        checksum       – new hex digest of the extended file
+        checksum_type  – algorithm name, e.g. sha256
+    """
+    sip_uuid = request.POST.get("uuid", "").strip()
+    relative_path = request.POST.get("relative_path", "").strip()
+    checksum = request.POST.get("checksum", "").strip()
+    checksum_type = request.POST.get("checksum_type", "").strip()
+
+    if not all([sip_uuid, relative_path, checksum, checksum_type]):
+        return helpers.json_response(
+            {"error": True, "message": "uuid, relative_path, checksum and checksum_type are required."},
+            status_code=400,
+        )
+
+    current_location = f"%SIPDirectory%{relative_path}".encode()
+    updated = models.File.objects.filter(
+        sip_id=sip_uuid,
+        currentlocation=current_location,
+    ).update(checksum=checksum, checksumtype=checksum_type)
+
+    LOGGER.info(
+        "[ipds] update_file_checksum: sip=%s path=%s checksum=%.12s… updated=%d row(s)",
+        sip_uuid, relative_path, checksum, updated,
+    )
+    return helpers.json_response({"updated": updated})
+
+
+@_api_endpoint(expected_methods=["POST"])
 def copy_metadata_files_api(request):
     """
     Endpoint for adding metadata files to a SIP if using an API key.
