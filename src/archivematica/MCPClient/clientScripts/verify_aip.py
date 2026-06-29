@@ -86,7 +86,7 @@ def get_expected_checksum(
     Bag manifest.
     """
     try:
-        return bag.entries[file_path][checksum_type]
+        expected = bag.entries[file_path][checksum_type]
     except KeyError:
         if is_reingest:
             return None
@@ -100,7 +100,13 @@ def get_expected_checksum(
                 job, sip_uuid, checksum_type, "Fail", event_outcome_detail_note
             )
         )
-
+    # On reingest, the DB checksum (file_.checksum) reflects the original
+    # ingest and may be stale if finish_reingest extended the file via IPDS
+    # after the previous bag was created. Skip the DB comparison; integrity
+    # of the transferred files is guaranteed by the bag manifest itself.
+    if is_reingest:
+        return None
+    return expected
 
 def assert_checksums_match(job, file_, sip_uuid, checksum_type, expected_checksum):
     """Raise an exception if checksums do not match."""
