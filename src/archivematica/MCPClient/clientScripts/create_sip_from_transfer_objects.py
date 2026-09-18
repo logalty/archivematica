@@ -28,6 +28,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from archivematica.archivematicaCommon import archivematicaFunctions
+from archivematica.archivematicaCommon.ipds import remove_object_salt
 from archivematica.dashboard.main.models import SIP
 from archivematica.dashboard.main.models import Agent
 from archivematica.dashboard.main.models import Directory
@@ -142,6 +143,7 @@ def call(jobs):
                         variable="misc_attributes",
                         variablevalue=transfer_misc_var.variablevalue
                     )
+                    remove_object_salt([transfer_misc_var])
                 except (UnitVariable.DoesNotExist, ValidationError):
                     pass
 

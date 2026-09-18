@@ -31,6 +31,7 @@ from metsrw.plugins import premisrw
 from archivematica.archivematicaCommon import storageService as storage_service
 from archivematica.archivematicaCommon.archivematicaFunctions import escape
 from archivematica.archivematicaCommon.custom_handlers import get_script_logger
+from archivematica.archivematicaCommon.ipds import remove_object_salt
 from archivematica.dashboard.main.models import Agent
 from archivematica.dashboard.main.models import DublinCore
 from archivematica.dashboard.main.models import Event
@@ -199,7 +200,7 @@ def store_aip(job, aip_destination_uri, aip_path, sip_uuid, sip_name, sip_type):
     # another row with encryption metadata like user_id/object_salt.
     misc_attributes = {}
 
-    misc_attribute_rows = (
+    misc_attribute_rows = list(
         UnitVariable.objects.filter(
             unittype="SIP",
             unituuid=sip_uuid,
@@ -214,9 +215,8 @@ def store_aip(job, aip_destination_uri, aip_path, sip_uuid, sip_name, sip_type):
             parsed = json.loads(unit_var.variablevalue)
         except json.JSONDecodeError:
             logger.warning(
-                "Could not decode misc_attributes UnitVariable for SIP %s: %r",
+                "Could not decode misc_attributes UnitVariable for SIP %s",
                 sip_uuid,
-                unit_var.variablevalue,
             )
             continue
         if isinstance(parsed, dict):
@@ -226,9 +226,9 @@ def store_aip(job, aip_destination_uri, aip_path, sip_uuid, sip_name, sip_type):
         misc_attributes = None
     else:
         logger.info(
-            "Merged misc_attributes for SIP %s: %s",
+            "Merged misc_attributes for SIP %s; keys=%s",
             sip_uuid,
-            pformat(misc_attributes),
+            sorted(misc_attributes),
         )
 
     # Store the AIP
@@ -251,7 +251,12 @@ def store_aip(job, aip_destination_uri, aip_path, sip_uuid, sip_name, sip_type):
         logger.warning(errmsg)
         raise Exception(errmsg + " See logs for more details.")
 
-    message = f"Storage Service created {sip_type}:\n{pformat(new_file)}"
+    remove_object_salt(misc_attribute_rows)
+
+    safe_new_file = dict(new_file)
+    if "misc_attributes" in safe_new_file:
+        safe_new_file["misc_attributes"] = "[REDACTED]"
+    message = f"Storage Service created {sip_type}:\n{pformat(safe_new_file)}"
     logger.info(message)
     job.pyprint(message)
 
