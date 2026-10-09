@@ -914,8 +914,14 @@ class Job(models.Model):
         (STATUS_EXECUTING_COMMANDS, _("Executing command(s)")),
         (STATUS_FAILED, _("Failed")),
     )
+    # Indexed on its own: MCPServer asks for the jobs awaiting a decision (currentStep = 1) at startup, and every
+    # composite index of this table has currentStep as its second column, so the query scanned the whole table.
     currentstep = models.IntegerField(
-        db_column="currentStep", choices=STATUS, default=0, blank=False
+        db_column="currentStep",
+        choices=STATUS,
+        default=0,
+        blank=False,
+        db_index=True,
     )
     microservicegroup = models.CharField(
         max_length=50, db_column="microserviceGroup", blank=True
