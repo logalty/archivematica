@@ -923,12 +923,12 @@ def _package_create(request):
     if processing_config is not None:
         kwargs["processing_config"] = processing_config
     
-    # Capturar user_id y object_salt para misc_attributes
+    # Capturar user_id para misc_attributes. The object salt is not kept (IPDS-650): ipds-storage reads it from the
+    # ipds database, and a copy in clear here defeats crypto-erasure. remove_object_salt() stays in the pipeline for
+    # transfers that were created before this change and still carry one.
     misc_attributes = {}
     if payload.get("user_id"):
         misc_attributes["user_id"] = payload.get("user_id")
-    if payload.get("object_salt"):
-        misc_attributes["object_salt"] = payload.get("object_salt")
     if misc_attributes:
         kwargs["misc_attributes"] = misc_attributes
     
