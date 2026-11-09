@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import datetime
+import logging
 import os
 import uuid
 
@@ -15,6 +16,8 @@ from archivematica.archivematicaCommon import fileOperations
 from archivematica.archivematicaCommon import namespaces as ns
 from archivematica.dashboard.fpr import models as fpr_models
 from archivematica.dashboard.main import models
+
+logger = logging.getLogger(__name__)
 
 MD_TYPE_SIP_ID = "3e48343d-e2d2-4956-aaa3-b54d26eb9761"
 
@@ -41,7 +44,27 @@ def parse_format_version(job, element):
         elif format_registry_name == "Archivematica Format Policy Registry":
             key = ns.xml_findtext_premis(element, ".//premis:formatRegistryKey")
             job.pyprint("FPR key", key)
-            format_version = fpr_models.IDRule.active.get(command_output=key).format
+            try:
+                format_version = fpr_models.IDRule.active.get(command_output=key).format
+            except fpr_models.IDRule.DoesNotExist:
+                # The key comes from the METS of the AIP being reingested and
+                # may not exist (or may no longer be active) in this FPR, e.g.
+                # "Generic SVG". Treat it as an unknown format instead of
+                # failing the whole job, like a missing FormatVersion.
+                file_uuid = ns.xml_findtext_premis(
+                    element, ".//premis:objectIdentifierValue"
+                )
+                logger.warning(
+                    "No active FPR identification rule for key %r (file %s);"
+                    " format version left unset",
+                    key,
+                    file_uuid,
+                )
+                job.pyprint(
+                    "WARNING: no active FPR identification rule for key",
+                    key,
+                    "(file %s)" % file_uuid,
+                )
     except fpr_models.FormatVersion.DoesNotExist:
         pass
     return format_version

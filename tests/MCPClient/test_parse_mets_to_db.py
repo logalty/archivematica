@@ -689,3 +689,86 @@ def test_main_unsets_partial_reingest_flag(etree, os, sip):
     parse_mets_to_db.main(job, str(sip.uuid), sip.currentpath)
 
     assert not sip.is_partial_reingest()
+
+
+PREMIS_NS = "http://www.loc.gov/premis/v3"
+FILE_UUID = "5c3f5d0e-6c4f-4f64-9d57-1a2b3c4d5e6f"
+
+
+def _techmd(registry_name, registry_key):
+    return etree.fromstring(
+        f"""
+        <techMD xmlns:premis="{PREMIS_NS}">
+          <premis:object>
+            <premis:objectIdentifier>
+              <premis:objectIdentifierValue>{FILE_UUID}</premis:objectIdentifierValue>
+            </premis:objectIdentifier>
+            <premis:objectCharacteristics>
+              <premis:format>
+                <premis:formatRegistry>
+                  <premis:formatRegistryName>{registry_name}</premis:formatRegistryName>
+                  <premis:formatRegistryKey>{registry_key}</premis:formatRegistryKey>
+                </premis:formatRegistry>
+              </premis:format>
+            </premis:objectCharacteristics>
+          </premis:object>
+        </techMD>
+        """
+    )
+
+
+FPR_REGISTRY = "Archivematica Format Policy Registry"
+
+
+@pytest.mark.django_db
+def test_parse_format_version_fpr_key_without_idrule_returns_none(mcp_job, caplog):
+    element = _techmd(FPR_REGISTRY, "Generic SVG")
+
+    with caplog.at_level("WARNING", logger=parse_mets_to_db.logger.name):
+        result = parse_mets_to_db.parse_format_version(mcp_job, element)
+
+    assert result is None
+    assert "Generic SVG" in caplog.text
+    assert FILE_UUID in caplog.text
+
+
+@pytest.mark.django_db
+def test_parse_format_version_fpr_key_with_inactive_idrule_returns_none(
+    mcp_job, idrule
+):
+    idrule.command_output = "Generic SVG"
+    idrule.enabled = False
+    idrule.save()
+
+    element = _techmd(FPR_REGISTRY, "Generic SVG")
+
+    assert parse_mets_to_db.parse_format_version(mcp_job, element) is None
+
+
+@pytest.mark.django_db
+def test_parse_format_version_fpr_key_with_idrule_returns_format(mcp_job, idrule):
+    idrule.command_output = "Generic SVG"
+    idrule.save()
+
+    element = _techmd(FPR_REGISTRY, "Generic SVG")
+
+    assert parse_mets_to_db.parse_format_version(mcp_job, element) == idrule.format
+
+
+@pytest.mark.django_db
+def test_parse_format_version_pronom_without_formatversion_returns_none(mcp_job):
+    element = _techmd("PRONOM", "fmt/does-not-exist")
+
+    assert parse_mets_to_db.parse_format_version(mcp_job, element) is None
+
+
+@pytest.mark.django_db
+def test_parse_format_version_pronom_with_formatversion_returns_it(
+    mcp_job, format_version
+):
+    format_version.pronom_id = "fmt/ipds-test-999"
+    format_version.save()
+
+    element = _techmd("PRONOM", "fmt/ipds-test-999")
+
+    assert parse_mets_to_db.parse_format_version(mcp_job, element) == format_version
