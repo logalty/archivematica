@@ -640,6 +640,28 @@ class TestCreateDigiprovMD(TestCase):
             )
             == 3
         )
+
+    def test_links_events_to_explicit_ipds_object(self):
+        state = create_mets_v2.MetsState()
+        ipds_object_id = "11111111-1111-4111-8111-111111111111"
+
+        ret = create_mets_v2.createDigiprovMD(
+            "ae8d4290-fe52-4954-b72a-0f591bee2e2f", state, ipds_object_id
+        )
+
+        event_entries = [entry for entry in ret if entry[0].get("MDTYPE") == "PREMIS:EVENT"]
+        assert event_entries
+        for entry in event_entries:
+            event = entry.find(".//{http://www.loc.gov/premis/v3}event")
+            identifier = event.find(
+                ".//{http://www.loc.gov/premis/v3}linkingObjectIdentifier"
+            )
+            assert identifier.find(
+                "{http://www.loc.gov/premis/v3}linkingObjectIdentifierType"
+            ).text == "IPDS_OBJECT_UUID"
+            assert identifier.find(
+                "{http://www.loc.gov/premis/v3}linkingObjectIdentifierValue"
+            ).text == ipds_object_id
         assert ret[5][0].attrib["MDTYPE"] == "PREMIS:EVENT"
         assert (
             ret[5].find(".//{http://www.loc.gov/premis/v3}eventType").text

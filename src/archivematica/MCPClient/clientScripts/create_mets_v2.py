@@ -27,6 +27,7 @@ from datetime import datetime
 from glob import glob
 from itertools import chain
 from optparse import OptionParser
+from uuid import UUID
 from uuid import uuid4
 
 import django
@@ -132,6 +133,10 @@ class MetsState:
         # group of the object and it's related access, license
 
         self.CSV_METADATA = {}
+        # Maps Archivematica file UUIDs to the explicit IPDS object UUID read
+        # from the SIP metadata. It lets derived files inherit attribution
+        # without guessing from filenames or AIP ordering.
+        self.ipds_object_ids = {}
         self.error_accumulator = ErrorAccumulator()
 
 
@@ -381,6 +386,65 @@ def createDmdSecsFromCSVParsedMetadata(job, metadata, state):
                         file=sys.stderr,
                     )
     return ret
+
+
+def _ipds_object_id_from_metadata(state, relative_path):
+    """Return the explicit IPDS object UUID for one metadata row.
+
+    IPDS writes ``dc.identifier`` into the metadata row for the original
+    object.  Only a single, syntactically valid UUID is accepted.  This keeps
+    PREMIS attribution deterministic when an AIP contains several objects and
+    avoids treating an arbitrary external identifier or file name as an IPDS
+    object id.
+    """
+    metadata = state.CSV_METADATA.get(relative_path, {})
+    identifiers = metadata.get("dc.identifier", [])
+    if len(identifiers) != 1:
+        return None
+    try:
+        return str(UUID(str(identifiers[0]).strip()))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def _ipds_object_id_for_file(file_record, relative_path, state):
+    """Resolve the explicit IPDS id for an original or its derived files."""
+    object_id = _ipds_object_id_from_metadata(state, relative_path)
+    if object_id:
+        state.ipds_object_ids[str(file_record.uuid)] = object_id
+        return object_id
+
+    # Derived files have no own metadata row. Follow the persisted derivation
+    # chain to the original file, whose metadata row carries dc.identifier.
+    current = file_record
+    visited = set()
+    for _ in range(10):
+        source_id = (
+            Derivation.objects.filter(derived_file_id=current.uuid)
+            .values_list("source_file_id", flat=True)
+            .first()
+        )
+        if not source_id or str(source_id) in visited:
+            break
+        visited.add(str(source_id))
+        mapped = state.ipds_object_ids.get(str(source_id))
+        if mapped:
+            state.ipds_object_ids[str(file_record.uuid)] = mapped
+            return mapped
+        try:
+            current = File.objects.get(uuid=source_id)
+        except File.DoesNotExist:
+            break
+        try:
+            source_path = current.currentlocation.decode()
+        except AttributeError:
+            source_path = ""
+        source_path = source_path.replace("%SIPDirectory%", "", 1).lstrip("/")
+        mapped = _ipds_object_id_from_metadata(state, source_path)
+        if mapped:
+            state.ipds_object_ids[str(file_record.uuid)] = mapped
+            return mapped
+    return None
 
 
 def createDublincoreDMDSecFromDBData(
@@ -718,7 +782,7 @@ def create_premis_object_derivations(fileUUID):
     return elements
 
 
-def createDigiprovMD(fileUUID, state):
+def createDigiprovMD(fileUUID, state, ipds_object_id=None):
     """
     Create digiprovMD for PREMIS Events and linking Agents.
     """
@@ -737,7 +801,7 @@ def createDigiprovMD(fileUUID, state):
             digiprovMD, ns.metsBNS + "mdWrap", MDTYPE="PREMIS:EVENT"
         )
         xmlData = etree.SubElement(mdWrap, ns.metsBNS + "xmlData")
-        xmlData.append(createEvent(event_record))
+        xmlData.append(createEvent(event_record, ipds_object_id))
 
     for agent in Agent.objects.extend_queryset_with_preservation_system(
         Agent.objects.filter(event__file_uuid_id=str(fileUUID)).distinct()
@@ -758,8 +822,14 @@ def createDigiprovMD(fileUUID, state):
     return ret
 
 
-def createEvent(event_record):
-    """Returns a PREMIS Event."""
+def createEvent(event_record, ipds_object_id=None):
+    """Returns a PREMIS Event.
+
+    ``IPDS_OBJECT_UUID`` is an explicit producer-to-preservation identifier.
+    It is deliberately added only when the SIP metadata supplies exactly one
+    valid UUID for the file; Archivematica's own file UUID is not an IPDS
+    object identifier and must not be substituted for it.
+    """
     event = etree.Element(ns.premisBNS + "event", nsmap={"premis": ns.premisNS})
     event.set(
         ns.xsiBNS + "schemaLocation",
@@ -798,6 +868,19 @@ def createEvent(event_record):
     etree.SubElement(
         eventOutcomeDetail, ns.premisBNS + "eventOutcomeDetailNote"
     ).text = event_record.event_outcome_detail
+
+    if ipds_object_id:
+        linkingObjectIdentifier = etree.SubElement(
+            event, ns.premisBNS + "linkingObjectIdentifier"
+        )
+        etree.SubElement(
+            linkingObjectIdentifier,
+            ns.premisBNS + "linkingObjectIdentifierType",
+        ).text = "IPDS_OBJECT_UUID"
+        etree.SubElement(
+            linkingObjectIdentifier,
+            ns.premisBNS + "linkingObjectIdentifierValue",
+        ).text = ipds_object_id
 
     # linkingAgentIdentifier
     for agent in Agent.objects.extend_queryset_with_preservation_system(
@@ -847,6 +930,7 @@ def getAMDSec(
     typeOfTransfer,
     baseDirectoryPath,
     state,
+    ipds_object_id=None,
 ):
     """
     Creates an amdSec.
@@ -904,7 +988,7 @@ def getAMDSec(
             )
             AMD.append(digiprovMD)
 
-    for a in createDigiprovMD(str(fileUUID), state):
+    for a in createDigiprovMD(str(fileUUID), state, ipds_object_id):
         AMD.append(a)
 
     return ret
@@ -1304,6 +1388,9 @@ def createFileSec(
                     ],
                 )
                 if includeAmdSec:
+                    ipds_object_id = _ipds_object_id_for_file(
+                        f, directoryPathSTR, state
+                    )
                     AMD, ADMID = getAMDSec(
                         job,
                         f.uuid,
@@ -1315,6 +1402,7 @@ def createFileSec(
                         typeOfTransfer,
                         baseDirectoryPath,
                         state,
+                        ipds_object_id,
                     )
                     state.amdSecs.append(AMD)
                     file_elem.set("ADMID", ADMID)
