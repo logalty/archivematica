@@ -1,6 +1,7 @@
 import collections
 import csv
 import importlib.resources
+import json
 import os
 import pathlib
 import random
@@ -20,6 +21,7 @@ from archivematica.MCPClient.client.job import Job
 from archivematica.MCPClient.clientScripts import archivematicaCreateMETSMetadataCSV
 from archivematica.MCPClient.clientScripts import archivematicaCreateMETSRights
 from archivematica.MCPClient.clientScripts import create_mets_v2
+from archivematica.MCPClient.clientScripts import json_metadata_to_csv
 
 THIS_DIR = pathlib.Path(__file__).parent
 
@@ -641,27 +643,6 @@ class TestCreateDigiprovMD(TestCase):
             == 3
         )
 
-    def test_links_events_to_explicit_ipds_object(self):
-        state = create_mets_v2.MetsState()
-        ipds_object_id = "11111111-1111-4111-8111-111111111111"
-
-        ret = create_mets_v2.createDigiprovMD(
-            "ae8d4290-fe52-4954-b72a-0f591bee2e2f", state, ipds_object_id
-        )
-
-        event_entries = [entry for entry in ret if entry[0].get("MDTYPE") == "PREMIS:EVENT"]
-        assert event_entries
-        for entry in event_entries:
-            event = entry.find(".//{http://www.loc.gov/premis/v3}event")
-            identifier = event.find(
-                ".//{http://www.loc.gov/premis/v3}linkingObjectIdentifier"
-            )
-            assert identifier.find(
-                "{http://www.loc.gov/premis/v3}linkingObjectIdentifierType"
-            ).text == "IPDS_OBJECT_UUID"
-            assert identifier.find(
-                "{http://www.loc.gov/premis/v3}linkingObjectIdentifierValue"
-            ).text == ipds_object_id
         assert ret[5][0].attrib["MDTYPE"] == "PREMIS:EVENT"
         assert (
             ret[5].find(".//{http://www.loc.gov/premis/v3}eventType").text
@@ -723,6 +704,115 @@ class TestCreateDigiprovMD(TestCase):
             ret[8].find(".//{http://www.loc.gov/premis/v3}agentType").text
             == "Archivematica user"
         )
+
+    def test_links_events_to_explicit_ipds_object(self):
+        state = create_mets_v2.MetsState()
+        ipds_object_id = "11111111-1111-4111-8111-111111111111"
+
+        ret = create_mets_v2.createDigiprovMD(
+            "ae8d4290-fe52-4954-b72a-0f591bee2e2f", state, ipds_object_id
+        )
+
+        event_entries = [entry for entry in ret if entry[0].get("MDTYPE") == "PREMIS:EVENT"]
+        assert event_entries
+        for entry in event_entries:
+            event = entry.find(".//{http://www.loc.gov/premis/v3}event")
+            identifier = event.find(
+                ".//{http://www.loc.gov/premis/v3}linkingObjectIdentifier"
+            )
+            assert identifier.find(
+                "{http://www.loc.gov/premis/v3}linkingObjectIdentifierType"
+            ).text == "IPDS_OBJECT_UUID"
+            assert identifier.find(
+                "{http://www.loc.gov/premis/v3}linkingObjectIdentifierValue"
+            ).text == ipds_object_id
+
+
+class TestIpdsObjectIdFromMetadata(TestCase):
+    """Test the IPDS object UUID lookup in the parsed SIP metadata."""
+
+    IPDS_ID = "11111111-1111-4111-8111-111111111111"
+
+    @pytest.fixture(autouse=True)
+    def tmp_dir(self, tmp_path):
+        tmpdir = tmp_path / "tmp"
+        tmpdir.mkdir()
+        self.tmpdir = tmpdir
+
+    def _lookup_from_csv(self, header, row):
+        metadata_file = self.tmpdir / "metadata.csv"
+        with open(metadata_file.as_posix(), "w") as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
+            writer.writerow(row)
+        state = create_mets_v2.MetsState()
+        state.CSV_METADATA = archivematicaCreateMETSMetadataCSV.parseMetadataCSV(
+            mcp_job, str(metadata_file)
+        )
+        return create_mets_v2._ipds_object_id_from_metadata(state, "objects/foo.pdf")
+
+    def _lookup_from_json(self, entry):
+        # ipds-api writes metadata/metadata.json and Archivematica converts it
+        # to metadata.csv, keeping each JSON key verbatim as the CSV header.
+        json_file = self.tmpdir / "metadata.json"
+        json_file.write_text(json.dumps([entry]))
+        json_metadata_to_csv.main(mcp_job, "stub", str(json_file))
+        state = create_mets_v2.MetsState()
+        state.CSV_METADATA = archivematicaCreateMETSMetadataCSV.parseMetadataCSV(
+            mcp_job, str(self.tmpdir / "metadata.csv")
+        )
+        return create_mets_v2._ipds_object_id_from_metadata(state, "objects/foo.pdf")
+
+    def test_colon_header_from_ipds_api_json(self):
+        entry = {"filename": "objects/foo.pdf", "dc:identifier": self.IPDS_ID}
+        assert self._lookup_from_json(entry) == self.IPDS_ID
+
+    def test_colon_header_from_csv(self):
+        result = self._lookup_from_csv(
+            ["filename", "dc:identifier"], ["objects/foo.pdf", self.IPDS_ID]
+        )
+        assert result == self.IPDS_ID
+
+    def test_dotted_header_from_csv(self):
+        result = self._lookup_from_csv(
+            ["filename", "dc.identifier"], ["objects/foo.pdf", self.IPDS_ID]
+        )
+        assert result == self.IPDS_ID
+
+    def test_value_is_normalised_and_stripped(self):
+        result = self._lookup_from_csv(
+            ["filename", "dc:identifier"],
+            ["objects/foo.pdf", " " + self.IPDS_ID.upper() + " "],
+        )
+        assert result == self.IPDS_ID
+
+    def test_several_values_are_ignored(self):
+        other_id = "22222222-2222-4222-8222-222222222222"
+        entry = {
+            "filename": "objects/foo.pdf",
+            "dc:identifier": [self.IPDS_ID, other_id],
+        }
+        assert self._lookup_from_json(entry) is None
+
+    def test_several_values_across_spellings_are_ignored(self):
+        other_id = "22222222-2222-4222-8222-222222222222"
+        result = self._lookup_from_csv(
+            ["filename", "dc:identifier", "dc.identifier"],
+            ["objects/foo.pdf", self.IPDS_ID, other_id],
+        )
+        assert result is None
+
+    def test_non_uuid_value_is_ignored(self):
+        entry = {"filename": "objects/foo.pdf", "dc:identifier": "doi:10.1000/182"}
+        assert self._lookup_from_json(entry) is None
+
+    def test_missing_identifier_is_ignored(self):
+        entry = {"filename": "objects/foo.pdf", "dc:title": "Foo"}
+        assert self._lookup_from_json(entry) is None
+
+    def test_unknown_path_is_ignored(self):
+        state = create_mets_v2.MetsState()
+        assert create_mets_v2._ipds_object_id_from_metadata(state, "objects/x") is None
 
 
 class TestRights(TestCase):

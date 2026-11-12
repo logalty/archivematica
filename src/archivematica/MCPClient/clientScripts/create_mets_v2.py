@@ -391,14 +391,20 @@ def createDmdSecsFromCSVParsedMetadata(job, metadata, state):
 def _ipds_object_id_from_metadata(state, relative_path):
     """Return the explicit IPDS object UUID for one metadata row.
 
-    IPDS writes ``dc.identifier`` into the metadata row for the original
-    object.  Only a single, syntactically valid UUID is accepted.  This keeps
+    IPDS writes ``dc:identifier`` (colon) into the metadata row for the
+    original object; ``json_metadata_to_csv`` and ``parseMetadataCSV`` keep
+    the column header verbatim as the dictionary key.  The dotted spelling
+    ``dc.identifier`` used by the stock Archivematica metadata.csv convention
+    is accepted too.  Only a single, syntactically valid UUID is accepted
+    across both spellings.  This keeps
     PREMIS attribution deterministic when an AIP contains several objects and
     avoids treating an arbitrary external identifier or file name as an IPDS
     object id.
     """
     metadata = state.CSV_METADATA.get(relative_path, {})
-    identifiers = metadata.get("dc.identifier", [])
+    identifiers = list(metadata.get("dc:identifier", [])) + list(
+        metadata.get("dc.identifier", [])
+    )
     if len(identifiers) != 1:
         return None
     try:
@@ -415,7 +421,7 @@ def _ipds_object_id_for_file(file_record, relative_path, state):
         return object_id
 
     # Derived files have no own metadata row. Follow the persisted derivation
-    # chain to the original file, whose metadata row carries dc.identifier.
+    # chain to the original file, whose metadata row carries the identifier.
     current = file_record
     visited = set()
     for _ in range(10):
